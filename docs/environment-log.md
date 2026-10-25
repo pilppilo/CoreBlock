@@ -42,6 +42,7 @@ disk cleanup done outside this session. See §6.
 | Android platform package | `platforms;android-36` | installed 2026-10-24, 131 MB ✅ |
 | Build tools | 36.0.0 | already installed ✅ |
 | Unit testing | JUnit 4.13.2 + kotlinx-coroutines-test 1.9.0 | fetched 2026-10-24 ✅ |
+| Emulator system image | `system-images;android-35;google_apis;x86_64` r09 | installed 2026-10-25, 3.5 GB ✅ |
 
 Runtime dependencies (LiteRT 1.1.1, ML Kit GenAI 1.0.0-beta1, Room 2.7.0, Compose BOM
 2025.02.00, lifecycle 2.8.7, coroutines 1.9.0) are declared in `app/build.gradle.kts` and
@@ -83,6 +84,9 @@ Accompanying in-repo changes (no downloads): AGP `8.8.0 → 8.9.1` in root
 | 2026-10-24 22:12 | `assembleDebug` attempt #1 | — | — | — | — | ❌ FAILED: project had no `gradle.properties` → `android.useAndroidX` missing. Fixed by adding standard `gradle.properties` (in-repo, no download) |
 | 2026-10-24 22:18 | `assembleDebug` attempt #2 — full dependency fetch | Compose BOM 2025.02.00, Room 2.7.0, LiteRT 1.1.1, ML Kit GenAI 1.0.0-beta1 + transitive deps | caches total 1005 MB | repo.maven.apache.org + dl.google.com | `~\.gradle\caches` | ✅ **BUILD SUCCESSFUL in 2m 30s** (36 tasks) → `app\build\outputs\apk\debug\app-debug.apk` (53.8 MB) |
 | 2026-10-24 22:35 | Test dependencies added & fetched | junit 4.13.2, kotlinx-coroutines-test 1.9.0 | ~2 MB | repo.maven.apache.org | `~\.gradle\caches` | ✅ for pure-JVM unit tests; 17/17 tests pass (`testDebugUnitTest`), `assembleDebug` still green (43 tasks) |
+| 2026-10-25 11:0x | `sdkmanager --install "system-images;android-35;google_apis;x86_64"` (user-approved manifest) | x86_64-35 r09 | 3.5 GB unpacked | dl.google.com | `…\Android\Sdk\system-images\` | ✅ for the emulator test device (nested virt enabled on host first) |
+| 2026-10-25 11:0x | Created AVD `CoreBlockTest` (Pixel 6 profile) + first boot | API 35 | ~8 GB runtime disk image | `~\.android\avd\CoreBlockTest.avd\` | ✅ booted in ~4 min; software rendering (swiftshader) inside Hyper-V guest |
+| 2026-10-25 11:2x | End-to-end dry-run verification on emulator | — | — | — | — | ✅ listener bound by system; posted promo classified `PROMOTIONAL 90% via rules` → logged `DRY_RUN`, notification left untouched in shade; dashboard shows both decisions; app process stable (only unrelated emulator ANRs under software rendering) |
 
 ## 6. Notes & constraints
 
