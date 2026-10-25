@@ -78,7 +78,7 @@ interface ClassifierEngine {
 object NormalizedTemplateHasher {
     private val URL_REGEX = Regex("""https?://\S+|www\.\S+""", RegexOption.IGNORE_CASE)
     private val GREETING_REGEX = Regex(
-        pattern = """^(hey|hi|hello|dear|welcome back)\s+[\p{L}\p{N}_-]{2,20}[,!:]?\s+""",
+        pattern = """^(hey|hi|hello|dear|welcome back)\s+[\p{L}\p{N}_-]{2,20}[,!:]?(?:\s+|$)""",
         option = RegexOption.IGNORE_CASE
     )
     private val DYNAMIC_TOKEN_REGEX = Regex(
@@ -160,6 +160,15 @@ interface CoreBlockDao {
 
     @Query("SELECT * FROM decision_log ORDER BY timestampEpochMs DESC LIMIT :limit")
     suspend fun getRecentDecisions(limit: Int = 50): List<DecisionLogEntity>
+
+    @Query(
+        """
+        SELECT * FROM decision_log 
+        WHERE actionTaken = 'PENDING_CANCEL' 
+          AND timestampEpochMs < :cutoffEpochMs
+        """
+    )
+    suspend fun getStalePendingCancels(cutoffEpochMs: Long): List<DecisionLogEntity>
 
     @Query(
         """
@@ -392,6 +401,14 @@ class LiteRtEngine(
 class AicoreForegroundEngine : ClassifierEngine {
     override val id: String = "aicore"
     override val supportsBackgroundExecution: Boolean = false
+
+    /**
+     * D4: the audit loop stays dormant while classify() is a heuristic stub — otherwise a
+     * constant placeholder verdict would flag innocent entries and evict real templates.
+     * Flip to true in Phase 3 when the ML Kit GenAI Prompt API is actually wired.
+     */
+    @Volatile var realBackendWired: Boolean = false
+
     override val isReadyForCachePersistence: Boolean = false
 
     fun isAppInForeground(): Boolean =
@@ -428,6 +445,7 @@ class AicoreForegroundEngine : ClassifierEngine {
      * Instead, evict the non-overridden template cache entry and flag the log item for user review.
      */
     suspend fun runForegroundShadowAudit(dao: CoreBlockDao) {
+        if (!realBackendWired) return // D4: stub must not write audit outcomes
         if (!isAvailable()) return
         val candidates = dao.getBorderlineDecisionsForAudit(limit = 10)
         for (entry in candidates) {
@@ -530,6 +548,29 @@ class CoreBlockNotificationListener : NotificationListenerService() {
             val now = System.currentTimeMillis()
             dao.purgeOldDecisionLogs(now - 7L * 24 * 3600 * 1000L)
             dao.purgeStaleTemplates(now - 30L * 24 * 3600 * 1000L)
+            reconcileStalePendingCancels()
+        }
+    }
+
+    /**
+     * D2: a row stuck at PENDING_CANCEL means the process died between the write-ahead log
+     * and cancelNotification. If the notification is still active the cancel never happened
+     * (mark NONE); if it is gone the cancel did happen (mark CANCELLED). Only rows older
+     * than 60 s are reconciled so in-flight processing is never raced.
+     */
+    private suspend fun reconcileStalePendingCancels() {
+        val stale = dao.getStalePendingCancels(System.currentTimeMillis() - 60_000L)
+        if (stale.isEmpty()) return
+        val activeKeys = try {
+            activeNotifications?.map { it.key }?.toSet() ?: emptySet()
+        } catch (_: Exception) {
+            return // listener not fully connected; retry on next connect
+        }
+        for (entry in stale) {
+            dao.updateActionTaken(
+                decisionId = entry.id,
+                actionTaken = if (entry.sbnKey in activeKeys) "NONE" else "CANCELLED"
+            )
         }
     }
 
@@ -631,7 +672,15 @@ class CoreBlockNotificationListener : NotificationListenerService() {
             }
         }
 
-        val shouldCancel = finalResult.verdict == Verdict.PROMOTIONAL &&
+        // D1: only deterministic rules, cache entries (written exclusively by real models),
+        // or a loaded real model may suppress. The heuristic stub observes and logs only.
+        val maySuppress = when {
+            finalResult.engineId == "rules" -> true
+            finalResult.engineId.startsWith("cache:") -> true
+            else -> liteRtEngine.isReadyForCachePersistence
+        }
+        val shouldCancel = maySuppress &&
+            finalResult.verdict == Verdict.PROMOTIONAL &&
             finalResult.confidence >= promoConfidenceThreshold
 
         // F7 fix: Write-ahead log BEFORE calling cancelNotification(sbnKey) so a crash
