@@ -163,6 +163,9 @@ interface CoreBlockDao {
     @Query("SELECT * FROM decision_log ORDER BY timestampEpochMs DESC LIMIT :limit")
     suspend fun getRecentDecisions(limit: Int = 50): List<DecisionLogEntity>
 
+    @Query("SELECT DISTINCT packageName FROM decision_log")
+    suspend fun getDistinctLoggedPackages(): List<String>
+
     @Query(
         """
         SELECT * FROM decision_log 
@@ -248,7 +251,7 @@ abstract class CoreBlockDatabase : RoomDatabase() {
 // ============================================================================
 
 class RulesEngine(
-    private val allowlistedPackages: Set<String> = DEFAULT_ALLOWLIST
+    private val allowlistedPackages: () -> Set<String> = { DEFAULT_ALLOWLIST }
 ) : ClassifierEngine {
 
     override val id: String = "rules"
@@ -273,7 +276,7 @@ class RulesEngine(
             val combinedText = "${input.title} ${input.body}"
 
             // Stage 1: Hard safety rails (Allowlist, secret visibility, or OTP pattern)
-            if (input.packageName in allowlistedPackages ||
+            if (input.packageName in allowlistedPackages() ||
                 input.isSecretVisibility ||
                 input.category == Notification.CATEGORY_CALL ||
                 input.category == Notification.CATEGORY_ALARM ||
@@ -553,6 +556,15 @@ class SuppressionDebugReceiver : BroadcastReceiver() {
         when (intent.action) {
             ACTION_ENABLE_SUPPRESSION -> SuppressionSettings.setEnabled(context, true)
             ACTION_DISABLE_SUPPRESSION -> SuppressionSettings.setEnabled(context, false)
+            ACTION_ALLOWLIST_ADD ->
+                intent.getStringExtra(EXTRA_PACKAGE_NAME)?.let { pkg ->
+                    AllowlistSettings.setAllowed(context, AllowlistSettings.getAllowed(context) + pkg)
+                }
+            ACTION_ALLOWLIST_REMOVE ->
+                intent.getStringExtra(EXTRA_PACKAGE_NAME)?.let { pkg ->
+                    AllowlistSettings.setAllowed(context, AllowlistSettings.getAllowed(context) - pkg)
+                }
+            ACTION_ALLOWLIST_RESET -> AllowlistSettings.resetToDefault(context)
             ACTION_UNDO_LAST_CANCEL -> {
                 val pending = goAsync()
                 CoroutineScope(Dispatchers.IO).launch {
@@ -574,6 +586,42 @@ class SuppressionDebugReceiver : BroadcastReceiver() {
         const val ACTION_ENABLE_SUPPRESSION = "dev.coreblock.debug.ENABLE_SUPPRESSION"
         const val ACTION_DISABLE_SUPPRESSION = "dev.coreblock.debug.DISABLE_SUPPRESSION"
         const val ACTION_UNDO_LAST_CANCEL = "dev.coreblock.debug.UNDO_LAST_CANCEL"
+        const val ACTION_ALLOWLIST_ADD = "dev.coreblock.debug.ALLOWLIST_ADD"
+        const val ACTION_ALLOWLIST_REMOVE = "dev.coreblock.debug.ALLOWLIST_REMOVE"
+        const val ACTION_ALLOWLIST_RESET = "dev.coreblock.debug.ALLOWLIST_RESET"
+        const val EXTRA_PACKAGE_NAME = "package_name"
+    }
+}
+
+// ============================================================================
+// 7d. Per-App Allowlist persistence (user-editable Stage 1 safety rail)
+// ============================================================================
+
+object AllowlistSettings {
+    private const val PREFS_NAME = "coreblock_allowlist_prefs"
+    private const val KEY_PACKAGES = "allowed_packages"
+
+    /**
+     * The effective Stage 1 allowlist: the user's stored set, or the compiled-in
+     * defaults when nothing has been stored yet. Copies on read because
+     * getStringSet hands back the cached instance the framework keeps mutating.
+     */
+    fun getAllowed(context: Context): Set<String> =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getStringSet(KEY_PACKAGES, null)?.toSet()
+            ?: RulesEngine.DEFAULT_ALLOWLIST
+
+    fun setAllowed(context: Context, packages: Set<String>) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putStringSet(KEY_PACKAGES, packages.toSet())
+            .apply()
+    }
+
+    /** Removes the stored set so future DEFAULT_ALLOWLIST changes flow through. */
+    fun resetToDefault(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().remove(KEY_PACKAGES)
+            .apply()
     }
 }
 
@@ -589,7 +637,9 @@ class CoreBlockNotificationListener : NotificationListenerService() {
     private val inFlightKeys = ConcurrentHashMap.newKeySet<String>()
 
     private lateinit var dao: CoreBlockDao
-    private val rulesEngine = RulesEngine()
+    // Deferred read: every classification sees the user's current allowlist
+    // (MainActivity shares this process, so UI edits apply to the next notification).
+    private val rulesEngine = RulesEngine { AllowlistSettings.getAllowed(this) }
     private val liteRtEngine = LiteRtEngine()
 
     var promoConfidenceThreshold: Float = 0.85f

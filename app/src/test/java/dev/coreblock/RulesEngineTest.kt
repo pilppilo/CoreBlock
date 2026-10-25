@@ -11,7 +11,7 @@ import org.junit.Test
  */
 class RulesEngineTest {
 
-    private val engine = RulesEngine(allowlistedPackages = setOf("com.bank.trusted"))
+    private val engine = RulesEngine(allowlistedPackages = { setOf("com.bank.trusted") })
 
     private fun input(
         pkg: String = "com.example.shop",
@@ -41,6 +41,29 @@ class RulesEngineTest {
     fun `allowlisted packages always pass`() = runTest {
         val r = engine.classify(input(pkg = "com.bank.trusted", body = "50% off loans!"))
         assertEquals(Verdict.PASS, r.verdict)
+    }
+
+    @Test
+    fun `allowlist provider changes apply to the next classification`() = runTest {
+        var allowlist = setOf("com.example.chat")
+        val engine = RulesEngine(allowlistedPackages = { allowlist })
+
+        assertEquals(
+            Verdict.PROMOTIONAL,
+            engine.classify(input(pkg = "com.example.shop", body = "Flash sale today")).verdict
+        )
+
+        allowlist = allowlist + "com.example.shop"
+        assertEquals(
+            Verdict.PASS,
+            engine.classify(input(pkg = "com.example.shop", body = "Flash sale today")).verdict
+        )
+
+        allowlist = emptySet()
+        assertEquals(
+            Verdict.PROMOTIONAL,
+            engine.classify(input(pkg = "com.example.chat", body = "Flash sale today")).verdict
+        )
     }
 
     @Test
