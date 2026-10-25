@@ -14,3 +14,6 @@ captures/
 # OS
 .DS_Store
 Thumbs.db
+
+# Phase 2 on-device model files (large, never committed; delivered via adb push)
+models/
