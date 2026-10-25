@@ -2,8 +2,10 @@ package dev.coreblock
 
 import android.app.Notification
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -534,6 +536,44 @@ object SuppressionSettings {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_ENABLED, enabled)
             .apply()
+    }
+}
+
+// ============================================================================
+// 7c. Debug-only test hook (no-op unless FLAG_DEBUGGABLE): lets adb-driven
+//     verification toggle suppression and fire Undo without Compose UI
+//     automation, which is unreliable on the software-rendered emulator.
+// ============================================================================
+
+class SuppressionDebugReceiver : BroadcastReceiver() {
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        val dao = CoreBlockDatabase.getInstance(context.applicationContext).dao()
+        when (intent.action) {
+            ACTION_ENABLE_SUPPRESSION -> SuppressionSettings.setEnabled(context, true)
+            ACTION_DISABLE_SUPPRESSION -> SuppressionSettings.setEnabled(context, false)
+            ACTION_UNDO_LAST_CANCEL -> {
+                val pending = goAsync()
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val target = dao.getRecentDecisions(limit = 50)
+                            .firstOrNull { it.actionTaken == "CANCELLED" && !it.userUndone }
+                        if (target != null) {
+                            CoreBlockNotificationListener.undoAndReplay(context, dao, target)
+                        }
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
+        }
+    }
+
+    companion object {
+        const val ACTION_ENABLE_SUPPRESSION = "dev.coreblock.debug.ENABLE_SUPPRESSION"
+        const val ACTION_DISABLE_SUPPRESSION = "dev.coreblock.debug.DISABLE_SUPPRESSION"
+        const val ACTION_UNDO_LAST_CANCEL = "dev.coreblock.debug.UNDO_LAST_CANCEL"
     }
 }
 

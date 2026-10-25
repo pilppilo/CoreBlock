@@ -26,5 +26,10 @@
             </intent-filter>
         </service>
 
+        <!-- Debug-only test hook: SuppressionDebugReceiver no-ops in release (FLAG_DEBUGGABLE guard) -->
+        <receiver
+            android:name=".SuppressionDebugReceiver"
+            android:exported="true" />
+
     </application>
 </manifest>
