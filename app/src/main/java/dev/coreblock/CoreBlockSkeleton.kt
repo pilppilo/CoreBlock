@@ -21,14 +21,22 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.EmbeddingEngine
+import com.google.ai.edge.litertlm.EmbeddingEngineConfig
+import com.google.ai.edge.litertlm.EmbeddingOptions
+import com.google.ai.edge.litertlm.ExperimentalApi
+import com.google.ai.edge.litertlm.InputData
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.sqrt
 import kotlin.system.measureTimeMillis
 
 // ============================================================================
@@ -347,6 +355,9 @@ class RulesEngine(
 // ============================================================================
 
 class LiteRtEngine(
+    // D7: absolute path of the .litertlm bundle, resolved lazily at warmUp.
+    // Null or missing file keeps the engine a log-only heuristic stub (D1).
+    private val modelPathProvider: () -> String? = { null },
     // F12 fix: LiteRT Interpreter is not thread-safe; confine all model calls to 1 thread.
     private val singleThreadDispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1)
 ) : ClassifierEngine {
@@ -356,6 +367,9 @@ class LiteRtEngine(
 
     @Volatile
     private var modelLoaded: Boolean = false
+    private var embeddingEngine: EmbeddingEngine? = null
+    private var promoAnchorVectors: List<FloatArray> = emptyList()
+    private var personalAnchorVectors: List<FloatArray> = emptyList()
 
     // F5c fix: Only persist to Room template_cache when a real model file is loaded,
     // never when running the fallback heuristic stub!
@@ -364,39 +378,163 @@ class LiteRtEngine(
 
     override suspend fun isAvailable(): Boolean = true
 
+    @OptIn(ExperimentalApi::class)
     override suspend fun warmUp() = withContext(singleThreadDispatcher) {
-        // Production hook: Load EmbeddingGemma-2 / MobileBERT .tflite asset into LiteRT
-        // Interpreter with GPU/NPU delegate on onListenerConnected() so the first notification
-        // does not pay cold-start model loading latency (fixes F6).
-        // Set modelLoaded = true once the real interpreter is initialized.
+        val path = modelPathProvider() ?: return@withContext
+        val modelFile = File(path)
+        if (!modelFile.exists() || modelFile.length() < MIN_MODEL_BYTES) return@withContext
+        try {
+            val engine = EmbeddingEngine(
+                EmbeddingEngineConfig(modelPath = path, backend = Backend.CPU())
+            )
+            engine.initialize()
+            promoAnchorVectors = PROMO_ANCHORS.map { embedText(engine, it) }
+            personalAnchorVectors = PERSONAL_ANCHORS.map { embedText(engine, it) }
+            embeddingEngine = engine
+            modelLoaded = true
+        } catch (_: Throwable) {
+            // D1: any load failure keeps the heuristic stub in charge (observe & log only)
+            runCatching { embeddingEngine?.close() }
+            embeddingEngine = null
+            modelLoaded = false
+        }
+    }
+
+    /** Releases the native interpreter (hundreds of MB in CPU mode); called from service onDestroy. */
+    fun shutdown() {
+        runCatching { embeddingEngine?.close() }
+        embeddingEngine = null
         modelLoaded = false
     }
 
+    @OptIn(ExperimentalApi::class)
+    private fun embedText(engine: EmbeddingEngine, text: String): FloatArray =
+        engine.computeEmbedding(
+            listOf(InputData.Text(text)),
+            EmbeddingOptions(normalize = true)
+        ).embedding
+
     override suspend fun classify(input: ClassificationInput): ClassificationResult =
         withContext(singleThreadDispatcher) {
-            var verdict = Verdict.PASS
-            var confidence = 0.5f
-            val latency = measureTimeMillis {
-                val text = "${input.title} ${input.body}".lowercase()
-                val promoSignals = listOf("sale", "discount", "offer", "reward", "points", "shop now", "deal")
-                val hits = promoSignals.count { text.contains(it) }
-                if (hits >= 2) {
-                    verdict = Verdict.PROMOTIONAL
-                    confidence = (0.78f + (hits * 0.06f)).coerceAtMost(0.94f)
-                } else {
-                    verdict = Verdict.PASS
-                    confidence = 0.85f
-                }
+            val engine = embeddingEngine
+            if (modelLoaded && engine != null) {
+                classifyWithEmbeddings(engine, input)
+            } else {
+                classifyWithHeuristicStub(input)
             }
-            ClassificationResult(
-                verdict = verdict,
-                confidence = confidence,
-                engineId = if (modelLoaded) id else "$id-stub",
-                latencyMs = latency,
-                modelVersion = if (modelLoaded) "embeddinggemma-2-int8" else "heuristic-stub-v1",
-                reason = "Single-thread confined LiteRT classification"
-            )
         }
+
+    private fun classifyWithHeuristicStub(input: ClassificationInput): ClassificationResult {
+        var verdict = Verdict.PASS
+        var confidence = 0.5f
+        val latency = measureTimeMillis {
+            val text = "${input.title} ${input.body}".lowercase()
+            val promoSignals = listOf("sale", "discount", "offer", "reward", "points", "shop now", "deal")
+            val hits = promoSignals.count { text.contains(it) }
+            if (hits >= 2) {
+                verdict = Verdict.PROMOTIONAL
+                confidence = (0.78f + (hits * 0.06f)).coerceAtMost(0.94f)
+            } else {
+                verdict = Verdict.PASS
+                confidence = 0.85f
+            }
+        }
+        return ClassificationResult(
+            verdict = verdict,
+            confidence = confidence,
+            engineId = "$id-stub",
+            latencyMs = latency,
+            modelVersion = "heuristic-stub-v1",
+            reason = "Single-thread confined LiteRT classification"
+        )
+    }
+
+    private fun classifyWithEmbeddings(engine: EmbeddingEngine, input: ClassificationInput): ClassificationResult {
+        var simPromo = 0f
+        var simPersonal = 0f
+        val latency = measureTimeMillis {
+            val vector = embedText(engine, "title: none | text: ${input.title}. ${input.body}")
+            simPromo = promoAnchorVectors.maxOf { cosineSimilarity(it, vector) }
+            simPersonal = personalAnchorVectors.maxOf { cosineSimilarity(it, vector) }
+        }
+        val (verdict, confidence) = marginToVerdict(simPromo - simPersonal)
+        return ClassificationResult(
+            verdict = verdict,
+            confidence = confidence,
+            engineId = id,
+            latencyMs = latency,
+            modelVersion = MODEL_VERSION,
+            reason = "EmbeddingGemma cosine margin (promo %.2f / personal %.2f)".format(simPromo, simPersonal)
+        )
+    }
+
+    companion object {
+        const val MODEL_VERSION = "embeddinggemma-2-text-270m"
+
+        // A real bundle is ~157 MB; anything smaller is a truncated push.
+        private const val MIN_MODEL_BYTES = 100_000_000L
+
+        // D7: zero-shot anchors — no training involved. Classification is cosine
+        // distance to these fixed example texts (embedded once at warmUp, with the
+        // same document prefix as live inputs). The two margins below are the only
+        // tuning surface.
+        const val DECISION_MARGIN = 0.05f // |promo - personal| distance needed to pick a side
+        const val STRONG_MARGIN = 0.12f   // margin at which confidence saturates
+
+        private val PROMO_ANCHORS = listOf(
+            "Flash sale this weekend only, everything must go",
+            "Unlock 50% off your next order with promo code SAVE",
+            "Limited time offer — subscribe now and save big",
+            "New deals every day, open the app to claim your reward",
+            "Your exclusive member discount expires tonight",
+            "Shop the biggest sale of the season before it ends",
+            "Refer a friend and earn bonus points instantly",
+            "Weekend only: double cashback on all purchases",
+            "You have unlocked a special coupon, tap to redeem",
+            "Early access to our biggest clearance event starts now",
+            "Don't miss out — items in your cart are on sale",
+            "Act now, last chance to grab this offer before it ends"
+        )
+
+        private val PERSONAL_ANCHORS = listOf(
+            "Hey, are we still on for dinner tomorrow night",
+            "Mom: call me when you land",
+            "Your order has shipped and arrives Tuesday",
+            "Meeting moved to 3pm, same room as before",
+            "Doctor appointment confirmed for Monday at 10",
+            "Your table for 4 is confirmed at 7:30 pm",
+            "Bank alert: your monthly statement is ready to view",
+            "Flight UA123 departs 9:15 am from gate B12",
+            "Sarah shared a photo with you",
+            "Your ride is arriving now",
+            "Package delivered to your front door",
+            "Reminder: take medication at 8pm"
+        )
+
+        fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
+            var dot = 0f
+            var normA = 0f
+            var normB = 0f
+            val n = minOf(a.size, b.size)
+            for (i in 0 until n) {
+                dot += a[i] * b[i]
+                normA += a[i] * a[i]
+                normB += b[i] * b[i]
+            }
+            val denom = sqrt(normA) * sqrt(normB)
+            return if (denom > 0f) dot / denom else 0f
+        }
+
+        fun marginToVerdict(margin: Float): Pair<Verdict, Float> = when {
+            margin >= DECISION_MARGIN -> Verdict.PROMOTIONAL to confidenceFor(margin)
+            margin <= -DECISION_MARGIN -> Verdict.PASS to confidenceFor(-margin)
+            else -> Verdict.AMBIGUOUS to 0.55f
+        }
+
+        private fun confidenceFor(absMargin: Float): Float =
+            (0.75f + (absMargin - DECISION_MARGIN) / (STRONG_MARGIN - DECISION_MARGIN) * 0.20f)
+                .coerceIn(0.75f, 0.95f)
+    }
 }
 
 // ============================================================================
@@ -640,7 +778,11 @@ class CoreBlockNotificationListener : NotificationListenerService() {
     // Deferred read: every classification sees the user's current allowlist
     // (MainActivity shares this process, so UI edits apply to the next notification).
     private val rulesEngine = RulesEngine { AllowlistSettings.getAllowed(this) }
-    private val liteRtEngine = LiteRtEngine()
+    // D7: the .litertlm bundle is adb-pushed to the app's external files dir; when
+    // absent the engine stays the log-only heuristic stub (D1). Path resolved at warmUp.
+    private val liteRtEngine = LiteRtEngine(
+        modelPathProvider = { getExternalFilesDir(null)?.resolve(MODEL_FILE_NAME)?.absolutePath }
+    )
 
     var promoConfidenceThreshold: Float = 0.85f
 
@@ -687,6 +829,7 @@ class CoreBlockNotificationListener : NotificationListenerService() {
     override fun onDestroy() {
         super.onDestroy()
         serviceJob.cancel()
+        liteRtEngine.shutdown()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -827,6 +970,8 @@ class CoreBlockNotificationListener : NotificationListenerService() {
     }
 
     companion object {
+        const val MODEL_FILE_NAME = "embeddinggemma-2-text-270m.litertlm"
+
         /**
          * One-tap Undo & Replay handler: permanently whitelists the normalized skeleton
          * in Room (userOverridden = true) and fires the cached PendingIntent (or opens the app).

@@ -22,8 +22,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
 
     buildFeatures {
@@ -41,6 +43,9 @@ dependencies {
 
     implementation("com.google.ai.edge.litert:litert:1.1.1")
 
+    // D7 (Phase 2): EmbeddingEngine for EmbeddingGemma 2 zero-shot classification
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
+
     // D6: ML Kit genai deps (genai-prompt/summarization/image-description) and
     // litert-gpu were stripped until the phases that use them. ML Kit injected
     // INTERNET/READ_PHONE_STATE-era permissions and ~0 MB (thin AICore client);
@@ -51,7 +56,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
 
-    val roomVersion = "2.7.0"
+    val roomVersion = "2.8.5"
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")

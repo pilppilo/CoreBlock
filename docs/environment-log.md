@@ -34,10 +34,10 @@ disk cleanup done outside this session. See §6.
 |---|---|---|
 | JDK to run Gradle | 17–21 → **existing system JDK 21** | AGP 8.9+ supports 17–21; nothing new installed |
 | Compile JVM target | 17 | `app/build.gradle.kts` (`kotlinOptions.jvmTarget`) |
-| Gradle | **8.13** | runs on JDK 21; satisfies AGP 8.9.x (needs ≥ 8.11.1) |
-| Android Gradle Plugin | **8.9.1** (bump from 8.8.0) | official match for `compileSdk 36` (8.8.0 warns) |
-| Kotlin / Compose compiler plugin | 2.1.0 | as configured |
-| KSP | 2.1.0-1.0.29 | as configured |
+| Gradle | **8.13** | runs on JDK 21; satisfies AGP 8.12.x (needs ≥ 8.13). Kotlin 2.5 will need ≥ 8.14.4 (warning only for now) |
+| Android Gradle Plugin | **8.12.3** (2026-10-25, from 8.9.1) | KSP 2.3.12 requires AGP ≥ 8.12.0 (Phase 2 toolchain bump) |
+| Kotlin / Compose compiler plugin | **2.4.21** (2026-10-25, from 2.1.0) | litertlm-android 0.17+ ships Kotlin-2.4 metadata only |
+| KSP | **2.3.12** (2026-10-25, from 2.1.0-1.0.29) | independent versioning since KSP2; requires AGP ≥ 8.12.0 |
 | compileSdk / targetSdk / minSdk | 36 / 36 / 30 | plan.md §11 |
 | Android platform package | `platforms;android-36` | installed 2026-10-24, 131 MB ✅ |
 | Build tools | 36.0.0 | already installed ✅ |
@@ -87,6 +87,8 @@ Accompanying in-repo changes (no downloads): AGP `8.8.0 → 8.9.1` in root
 | 2026-10-25 11:0x | `sdkmanager --install "system-images;android-35;google_apis;x86_64"` (user-approved manifest) | x86_64-35 r09 | 3.5 GB unpacked | dl.google.com | `…\Android\Sdk\system-images\` | ✅ for the emulator test device (nested virt enabled on host first) |
 | 2026-10-25 11:0x | Created AVD `CoreBlockTest` (Pixel 6 profile) + first boot | API 35 | ~8 GB runtime disk image | `~\.android\avd\CoreBlockTest.avd\` | ✅ booted in ~4 min; software rendering (swiftshader) inside Hyper-V guest |
 | 2026-10-25 11:2x | End-to-end dry-run verification on emulator | — | — | — | — | ✅ listener bound by system; posted promo classified `PROMOTIONAL 90% via rules` → logged `DRY_RUN`, notification left untouched in shade; dashboard shows both decisions; app process stable (only unrelated emulator ANRs under software rendering) |
+| 2026-10-25 15:26 | Download `embeddinggemma-2-text-270m.litertlm` (user-approved Phase 2 manifest) | EmbeddingGemma 2 text-270m, litert-community `.litertlm` bundle | 164,626,432 B | huggingface.co/litert-community/embeddinggemma-2-text-270m-litert-lm | `coreblock\models\` (gitignored) | ✅ byte-exact match with announced content-length; to device via `adb push` only, no app INTERNET permission |
+| 2026-10-25 15:3x | Phase 2 toolchain & dependency fetch via Gradle | `litertlm-android 0.18.0`; Kotlin 2.1.0→2.4.21; KSP 2.1.0-1.0.29→2.3.12; AGP 8.9.1→8.12.3; Room 2.7.0→2.8.5 | (into caches) | repo1.maven.org + dl.google.com | `~\.gradle\caches` + in-repo root/app `build.gradle.kts` | ✅ forced: every EmbeddingEngine-bearing litertlm release (0.17.0+) ships Kotlin-2.4 metadata only (verified via `.kotlin_module` headers); KSP 2.3.12 requires AGP ≥ 8.12; `jvmTarget`→`compilerOptions` DSL migration; BUILD SUCCESSFUL |
 
 ## 6. Notes & constraints
 
