@@ -42,9 +42,9 @@ dependencies {
     implementation("com.google.ai.edge.litert:litert:1.1.1")
     implementation("com.google.ai.edge.litert:litert-gpu:1.1.1")
 
-    implementation("com.google.mlkit:genai-prompt:1.0.0-beta1")
-    implementation("com.google.mlkit:genai-summarization:1.0.0-beta1")
-    implementation("com.google.mlkit:genai-image-description:1.0.0-beta1")
+    // D6: ML Kit genai deps (genai-prompt/summarization/image-description) were here.
+    // Stripped until Phase 3 actually wires AICore — they injected INTERNET,
+    // READ_PHONE_STATE, network/storage permissions and ~48 MB of APK bloat.
 
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
