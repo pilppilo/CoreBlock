@@ -163,3 +163,12 @@ Template cache hit rate: 84%      Battery overhead: <0.8%/day
 * **Foreground Audit & Summarization AI:** [ML Kit GenAI APIs](https://developers.google.com/ml-kit/genai) (`com.google.mlkit:genai-prompt`, `com.google.mlkit:genai-summarization`, `com.google.mlkit:genai-image-description`) on AICore
 * **Persistence:** Room (7-day rolling decision log, normalized template cache), Jetpack DataStore (preferences), in-memory `LruCache<Long, PendingIntent>` for session deep-link replay
 * **Target SDK:** `minSdk = 30` (Android 11+), `targetSdk = 36`
+
+## 12. Open Decision Log
+
+| # | Question | Resolution (2026-10-24) |
+|---|---|---|
+| D1 | May the heuristic LiteRT stub cancel notifications before the real model loads? | **No.** Stub verdicts are logged only. Suppression requires a `rules` verdict, a `cache:*` hit (only real models write those), or `isReadyForCachePersistence == true`. |
+| D2 | How are rows stuck at `PENDING_CANCEL` handled? | Reconciled on `onListenerConnected` for rows older than 60 s: notification still active → `NONE` (cancel never happened); gone → `CANCELLED`. |
+| D3 | `CATEGORY_MESSAGE` auto-pass exempts messaging-app marketing — accept? | **Accepted** as a deliberate precision-over-recall trade-off (never eat a person's message). Revisit with per-app controls in Phase 1 UX. |
+| D4 | May the stub AICore auditor write audit outcomes? | **No.** `runForegroundShadowAudit` stays dormant (`realBackendWired = false`) until the real ML Kit Prompt API is wired in Phase 3. |
