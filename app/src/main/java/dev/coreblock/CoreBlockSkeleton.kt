@@ -134,7 +134,7 @@ data class DecisionLogEntity(
     val engineId: String,
     val latencyMs: Long,
     val modelVersion: String,
-    val actionTaken: String, // "NONE" | "CANCELLED" | "PENDING_CANCEL"
+    val actionTaken: String, // "NONE" | "DRY_RUN" | "PENDING_CANCEL" | "CANCELLED"
     val userUndone: Boolean = false,
     val needsUserReview: Boolean = false,
     val aicoreAuditVerdict: Verdict? = null,
@@ -518,6 +518,26 @@ object PendingIntentReplayCache {
 }
 
 // ============================================================================
+// 7b. Suppression Toggle (D5: dry-run by default — log only, cancel nothing)
+// ============================================================================
+
+object SuppressionSettings {
+    private const val PREFS_NAME = "coreblock_suppression_prefs"
+    private const val KEY_ENABLED = "suppression_enabled"
+
+    /** False until the user flips the dashboard switch: every would-be cancel is logged as DRY_RUN. */
+    fun isEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_ENABLED, false)
+
+    fun setEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_ENABLED, enabled)
+            .apply()
+    }
+}
+
+// ============================================================================
 // 8. Module 1: Real-Time Notification Firewall Service (Fixes F1, F3, F4, F5b, F7, F12)
 // ============================================================================
 
@@ -679,9 +699,11 @@ class CoreBlockNotificationListener : NotificationListenerService() {
             finalResult.engineId.startsWith("cache:") -> true
             else -> liteRtEngine.isReadyForCachePersistence
         }
-        val shouldCancel = maySuppress &&
+        val wantsCancel = maySuppress &&
             finalResult.verdict == Verdict.PROMOTIONAL &&
             finalResult.confidence >= promoConfidenceThreshold
+        // D5: dry-run by default — nothing is cancelled until the user enables suppression.
+        val shouldCancel = wantsCancel && SuppressionSettings.isEnabled(this)
 
         // F7 fix: Write-ahead log BEFORE calling cancelNotification(sbnKey) so a crash
         // never leaves a cancelled notification without an Undo record.
@@ -697,7 +719,11 @@ class CoreBlockNotificationListener : NotificationListenerService() {
                 engineId = finalResult.engineId,
                 latencyMs = finalResult.latencyMs,
                 modelVersion = finalResult.modelVersion,
-                actionTaken = if (shouldCancel) "PENDING_CANCEL" else "NONE"
+                actionTaken = when {
+                    shouldCancel -> "PENDING_CANCEL"
+                    wantsCancel -> "DRY_RUN"
+                    else -> "NONE"
+                }
             )
         )
 

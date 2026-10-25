@@ -20,6 +20,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -68,6 +69,9 @@ fun CoreBlockDashboardScreen(
     var listenerEnabled by remember {
         mutableStateOf(CoreBlockNotificationListener.isNotificationAccessGranted(context))
     }
+    var suppressionEnabled by remember {
+        mutableStateOf(SuppressionSettings.isEnabled(context))
+    }
 
     LaunchedEffect(Unit) {
         listenerEnabled = CoreBlockNotificationListener.isNotificationAccessGranted(context)
@@ -104,6 +108,35 @@ fun CoreBlockDashboardScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Cancel promotional notifications",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "Off = dry-run: decisions are logged only, nothing is cancelled",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Switch(
+                        checked = suppressionEnabled,
+                        onCheckedChange = { enabled ->
+                            SuppressionSettings.setEnabled(context, enabled)
+                            suppressionEnabled = enabled
+                        }
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -139,6 +172,13 @@ fun CoreBlockDashboardScreen(
                                 Text(
                                     text = "Needs Review: Gemini Nano foreground audit disagreed with LiteRT",
                                     color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                            if (item.actionTaken == "DRY_RUN") {
+                                Text(
+                                    text = "Dry-run: would have cancelled",
+                                    color = MaterialTheme.colorScheme.tertiary,
                                     style = MaterialTheme.typography.labelSmall
                                 )
                             }
