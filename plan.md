@@ -172,3 +172,4 @@ Template cache hit rate: 84%      Battery overhead: <0.8%/day
 | D2 | How are rows stuck at `PENDING_CANCEL` handled? | Reconciled on `onListenerConnected` for rows older than 60 s: notification still active → `NONE` (cancel never happened); gone → `CANCELLED`. |
 | D3 | `CATEGORY_MESSAGE` auto-pass exempts messaging-app marketing — accept? | **Accepted** as a deliberate precision-over-recall trade-off (never eat a person's message). Revisit with per-app controls in Phase 1 UX. |
 | D4 | May the stub AICore auditor write audit outcomes? | **No.** `runForegroundShadowAudit` stays dormant (`realBackendWired = false`) until the real ML Kit Prompt API is wired in Phase 3. |
+| D5 | Should the app cancel notifications out of the box? | **No — dry-run by default.** Suppression is disabled until the user flips the dashboard switch (`SuppressionSettings`); until then every would-be cancel is logged as `DRY_RUN` and no notification is touched. |
