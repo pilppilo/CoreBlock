@@ -40,11 +40,13 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
 
     implementation("com.google.ai.edge.litert:litert:1.1.1")
-    implementation("com.google.ai.edge.litert:litert-gpu:1.1.1")
 
-    // D6: ML Kit genai deps (genai-prompt/summarization/image-description) were here.
-    // Stripped until Phase 3 actually wires AICore — they injected INTERNET,
-    // READ_PHONE_STATE, network/storage permissions and ~48 MB of APK bloat.
+    // D6: ML Kit genai deps (genai-prompt/summarization/image-description) and
+    // litert-gpu were stripped until the phases that use them. ML Kit injected
+    // INTERNET/READ_PHONE_STATE-era permissions and ~0 MB (thin AICore client);
+    // litert-gpu's legacy manifest (org.tensorflow.lite.gpu.api targetSdk < 4)
+    // implied READ_PHONE_STATE + storage permissions and ~11 MB of native libs.
+    // Core litert stays for the Phase 2 engine; both return with their phase.
 
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
